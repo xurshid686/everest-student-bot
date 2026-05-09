@@ -2,6 +2,8 @@ import asyncio
 import logging
 import sys
 import os
+import time
+from collections import defaultdict
 
 # Load .env if present (local dev), ignored on Railway
 try:
@@ -49,6 +51,32 @@ MOCK_SUBSECTIONS = {
     "🎧 Listening": ["🎵 Part 1", "🎵 Part 2", "🎵 Part 3", "🎵 Part 4"],
     "📖 Reading":   ["📄 Passage 1", "📄 Passage 2", "📄 Passage 3"],
 }
+
+# ─────────────────────────────────────────────
+#  RATE LIMITER
+# ─────────────────────────────────────────────
+RATE_LIMIT        = 20    # max requests
+RATE_WINDOW       = 60    # per N seconds
+RATE_COOLDOWN     = 60    # cooldown after hitting limit (seconds)
+
+_rate_data: dict = defaultdict(list)   # uid -> [timestamps]
+_rate_blocked: dict = defaultdict(float)  # uid -> blocked_until timestamp
+
+def is_rate_limited(uid: int) -> bool:
+    now = time.time()
+    # Check if still in cooldown
+    if _rate_blocked[uid] > now:
+        return True
+    # Clean old timestamps outside window
+    _rate_data[uid] = [t for t in _rate_data[uid] if now - t < RATE_WINDOW]
+    # Add current request
+    _rate_data[uid].append(now)
+    # Check if over limit
+    if len(_rate_data[uid]) > RATE_LIMIT:
+        _rate_blocked[uid] = now + RATE_COOLDOWN
+        _rate_data[uid].clear()
+        return True
+    return False
 
 # ─────────────────────────────────────────────
 #  DATABASE
@@ -450,6 +478,38 @@ class Reminder(StatesGroup):
 #  HELPERS
 # ─────────────────────────────────────────────
 router = Router()
+
+# Rate limit middleware
+from aiogram import BaseMiddleware
+from aiogram.types import TelegramObject
+from typing import Callable, Awaitable, Any
+
+class RateLimitMiddleware(BaseMiddleware):
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, dict], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict
+    ) -> Any:
+        # Get user id from message or callback
+        user = None
+        if hasattr(event, "from_user"):
+            user = event.from_user
+        if user and not data.get("event_from_user"):
+            data["event_from_user"] = user
+        uid = user.id if user else None
+        if uid and is_rate_limited(uid):
+            cooldown_left = int(_rate_blocked[uid] - time.time())
+            msg = f"⏳ Please slow down!\nToo many requests. Try again in <b>{cooldown_left}</b> seconds."
+            try:
+                if hasattr(event, "answer"):
+                    await event.answer(msg, parse_mode="HTML")
+                elif hasattr(event, "message") and event.message:
+                    await event.message.answer(msg, parse_mode="HTML")
+            except Exception:
+                pass
+            return  # Block handler
+        return await handler(event, data)
 isa = lambda uid: uid == ADMIN_ID
 
 async def send_item(bot, chat_id, item):
@@ -1462,6 +1522,8 @@ async def main():
 
     log.info("Bot starting...")
     await bot.delete_webhook(drop_pending_updates=True)
+    router.message.middleware(RateLimitMiddleware())
+    router.callback_query.middleware(RateLimitMiddleware())
 
     # Set up the persistent Menu button with commands
     await bot.set_my_commands([
