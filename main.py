@@ -254,7 +254,7 @@ async def db_list_group():
     p = await get_pool()
     async with p.acquire() as c:
         rows = await c.fetch(
-            "SELECT id,day_type,section,title FROM group_content ORDER BY day_type,section,created_at DESC")
+            "SELECT id,day_type,lesson_time,section,title FROM group_content ORDER BY day_type,lesson_time,section,created_at DESC")
         return [dict(r) for r in rows]
 
 async def db_get_ucats():
@@ -996,11 +996,27 @@ async def cmd_list_group(m: Message):
     if not isa(m.from_user.id): return await m.answer("Not authorized.")
     rows = await db_list_group()
     if not rows: return await m.answer("No group content yet.")
-    txt = "<b>Group Content</b>\n\n"
+
+    # Group by day_type + lesson_time + section
+    from collections import defaultdict as _dd
+    grouped = _dd(lambda: _dd(list))
     for r in rows:
-        day = "Odd" if r["day_type"] == "odd" else "Even"
-        txt += f"ID <code>{r['id']}</code> | {day} | {r['section']} | {r['title']}\n"
-    await m.answer(txt[:4000])
+        group_key = ("🔵 Odd Days" if r["day_type"] == "odd" else "🟢 Even Days") + f" — {r.get('lesson_time', '')}"
+        sec_label = SEC_LABELS.get(r["section"], r["section"])
+        grouped[group_key][sec_label].append(r)
+
+    txt = "📋 <b>Group Content</b>\n"
+    for group_name in sorted(grouped.keys()):
+        txt += f"\n<b>{group_name}</b>\n"
+        for sec_name in sorted(grouped[group_name].keys()):
+            txt += f"  {sec_name}\n"
+            for r in grouped[group_name][sec_name]:
+                txt += f"    • <code>ID:{r['id']}</code> {r['title']}\n"
+
+    # Send in chunks if too long
+    chunks = [txt[i:i+4000] for i in range(0, len(txt), 4000)]
+    for chunk in chunks:
+        await m.answer(chunk)
 
 @router.message(Command("del_group"))
 async def cmd_del_group(m: Message, state: FSMContext):
