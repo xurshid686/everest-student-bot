@@ -687,40 +687,69 @@ async def sc_save(m: Message, state: FSMContext):
         f"Code: <code>{m.text.strip()}</code>")
 
 # ── Add group content
+def ag_section_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        *[[btn(lbl, f"ag_sec:{key}")] for lbl, key in GROUP_SECTIONS],
+        [btn("❌ Cancel", "ag_cancel")]
+    ])
+
+def ag_day_kb(section):
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [btn("🔵 Odd Days", f"ag_day:{section}:odd"), btn("🟢 Even Days", f"ag_day:{section}:even")],
+        [btn("⬅️ Back", "ag_back:section")]
+    ])
+
 @router.message(Command("add_group"))
 async def cmd_add_group(m: Message, state: FSMContext):
     if not isa(m.from_user.id): return await m.answer("Not authorized.")
     await state.set_state(AddGroup.section)
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [btn(lbl, f"ag_sec:{key}")] for lbl, key in GROUP_SECTIONS
-    ])
-    await m.answer("Add group content.\n\nChoose section:", reply_markup=kb)
+    await m.answer("Add group content.\n\nChoose section:", reply_markup=ag_section_kb())
+
+@router.callback_query(F.data == "ag_cancel")
+async def ag_cancel(cb: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await cb.message.edit_text("❌ Cancelled.")
+
+@router.callback_query(F.data == "ag_back:section")
+async def ag_back_section(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(AddGroup.section)
+    await cb.message.edit_text("Add group content.\n\nChoose section:", reply_markup=ag_section_kb())
 
 @router.callback_query(F.data.startswith("ag_sec:"), AddGroup.section)
 async def ag_section_cb(cb: CallbackQuery, state: FSMContext):
     s = cb.data.split(":", 1)[1]
     valid = [k for _, k in GROUP_SECTIONS]
     if s not in valid:
-        return await m.answer("Invalid. Send one of: " + ", ".join(valid))
+        return await cb.answer("Invalid section.")
     await state.update_data(section=s)
     await state.set_state(AddGroup.day_type)
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [btn("🔵 Odd Days", "ag_day:odd"), btn("🟢 Even Days", "ag_day:even")]
-    ])
-    await cb.message.edit_text(f"Section: <b>{SEC_LABELS.get(s, s)}</b>\n\nChoose day type:", reply_markup=kb)
+    await cb.message.edit_text(f"Section: <b>{SEC_LABELS.get(s, s)}</b>\n\nChoose day type:", reply_markup=ag_day_kb(s))
 
 @router.callback_query(F.data.startswith("ag_day:"), AddGroup.day_type)
 async def ag_day_cb(cb: CallbackQuery, state: FSMContext):
-    v = cb.data.split(":", 1)[1]
-    await state.update_data(day_type=v)
+    parts = cb.data.split(":")
+    section, v = parts[1], parts[2]
+    await state.update_data(day_type=v, section=section)
     await state.set_state(AddGroup.title)
-    await cb.message.edit_text(f"Day: <b>{'Odd' if v=='odd' else 'Even'} Days</b>\n\nSend the <b>title</b>:")
+    cancel_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [btn("⬅️ Back", f"ag_back:day:{section}"), btn("❌ Cancel", "ag_cancel")]
+    ])
+    await cb.message.edit_text(
+        f"Section: <b>{SEC_LABELS.get(section, section)}</b> | Day: <b>{'Odd' if v=='odd' else 'Even'} Days</b>\n\nSend the <b>title</b>:",
+        reply_markup=cancel_kb)
+
+@router.callback_query(F.data.startswith("ag_back:day:"))
+async def ag_back_day(cb: CallbackQuery, state: FSMContext):
+    section = cb.data.split(":", 2)[2]
+    await state.update_data(section=section)
+    await state.set_state(AddGroup.day_type)
+    await cb.message.edit_text(f"Section: <b>{SEC_LABELS.get(section, section)}</b>\n\nChoose day type:", reply_markup=ag_day_kb(section))
 
 @router.message(AddGroup.title, F.text)
 async def ag_title(m: Message, state: FSMContext):
     await state.update_data(title=m.text.strip())
     await state.set_state(AddGroup.content)
-    await m.answer("Title saved!\n\nSend content:\ntext / photo / document / video / audio / voice\n\nOr /skip for title only.")
+    await m.answer("Title saved!\n\nSend content:\ntext / photo / document / video / audio / voice\n\nOr /cancel to stop.")
 
 @router.message(AddGroup.content)
 async def ag_content(m: Message, state: FSMContext):
