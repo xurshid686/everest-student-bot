@@ -1405,6 +1405,23 @@ async def cmd_students(m: Message):
         txt += f"• {name} | {day} Days | {s['lesson_time']}\n"
     await m.answer(txt[:4000])
 
+@router.message(Command("groups"))
+async def cmd_groups(m: Message, state: FSMContext):
+    await state.clear()
+    student = await db_get_student(m.from_user.id)
+    if student:
+        label = "Odd" if student["day_type"] == "odd" else "Even"
+        await m.answer(
+            f"👥 <b>{label} Days</b> — ⏰ <b>{student['lesson_time']}</b>\n\nYour materials:",
+            reply_markup=group_sec_kb(student["day_type"]))
+    else:
+        await m.answer("Choose your group type:", reply_markup=day_type_kb())
+
+@router.message(Command("mock"))
+async def cmd_mock(m: Message, state: FSMContext):
+    await state.clear()
+    await m.answer("📝 <b>Mock Tests</b>\n\nChoose a section:", reply_markup=await mock_kb())
+
 @router.message(Command("cancel"))
 async def cmd_cancel(m: Message, state: FSMContext):
     await state.clear()
@@ -1448,21 +1465,9 @@ async def main():
 
     # Set up the persistent Menu button with commands
     await bot.set_my_commands([
-        BotCommand(command="start",      description="Open main menu"),
-        BotCommand(command="admin",      description="Admin panel"),
-        BotCommand(command="set_code",   description="Set join code for a group"),
-        BotCommand(command="students",   description="View all registered students"),
-        BotCommand(command="add_group",  description="Add content to a group"),
-        BotCommand(command="list_group", description="List all group content"),
-        BotCommand(command="del_group",  description="Delete group content by ID"),
-        BotCommand(command="add_mock",   description="Add mock test (button-based)"),
-        BotCommand(command="add_ucat",   description="Add Universal category"),
-        BotCommand(command="del_ucat",   description="Delete Universal category"),
-        BotCommand(command="add_ucontent", description="Add content to Universal category"),
-        BotCommand(command="del_ucontent", description="Delete Universal content by ID"),
-        BotCommand(command="reminder",   description="Send reminder to a group"),
-        BotCommand(command="broadcast",  description="Send message to all students"),
-        BotCommand(command="cancel",     description="Cancel current action"),
+        BotCommand(command="start",      description="🏠 Open main menu"),
+        BotCommand(command="groups",     description="👥 My group materials"),
+        BotCommand(command="mock",       description="📝 Mock tests"),
     ], scope=BotCommandScopeDefault())
     await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
 
