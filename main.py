@@ -236,13 +236,13 @@ async def db_add_group(day_type, section, title, body="", file_id="", file_type=
             VALUES($1,$2,$3,$4,$5,$6)
         """, day_type, section, title, body, file_id, file_type)
 
-async def db_get_group(day_type, section):
+async def db_get_group(day_type, lesson_time, section):
     p = await get_pool()
     async with p.acquire() as c:
         rows = await c.fetch("""
             SELECT * FROM group_content
-            WHERE day_type=$1 AND section=$2 ORDER BY created_at DESC
-        """, day_type, section)
+            WHERE day_type=$1 AND lesson_time=$2 AND section=$3 ORDER BY created_at DESC
+        """, day_type, lesson_time, section)
         return [dict(r) for r in rows]
 
 async def db_del_group(cid):
@@ -395,9 +395,9 @@ def confirm_kb(day_type, t):
         [btn("❌ Cancel",              f"day:{day_type}")],
     ])
 
-def group_sec_kb(day_type):
+def group_sec_kb(day_type, lesson_time=""):
     return ikb([
-        [btn(lbl, f"gsec:{day_type}:{key}")]
+        [btn(lbl, f"gsec:{day_type}:{lesson_time}:{key}")]
         for lbl, key in GROUP_SECTIONS
     ] + [
         [btn("🔄 Change Group", "change_group")],
@@ -583,7 +583,7 @@ async def groups_menu(cb: CallbackQuery):
         label = "Odd" if student["day_type"] == "odd" else "Even"
         await cb.message.edit_text(
             f"👥 <b>{label} Days</b> — ⏰ <b>{student['lesson_time']}</b>\n\nYour materials:",
-            reply_markup=group_sec_kb(student["day_type"]))
+            reply_markup=group_sec_kb(student["day_type"], student["lesson_time"]))
     else:
         await cb.message.edit_text("Choose your group type:", reply_markup=day_type_kb())
 
@@ -640,21 +640,24 @@ async def check_code(m: Message, state: FSMContext):
     label = "Odd Days" if day_type == "odd" else "Even Days"
     await m.answer(
         f"✅ Joined <b>{label}</b> at <b>{lesson_time}</b>!\n\nYour materials:",
-        reply_markup=group_sec_kb(day_type))
+        reply_markup=group_sec_kb(day_type, lesson_time))
 
 @router.callback_query(F.data.startswith("gsec:"))
 async def group_section(cb: CallbackQuery):
     parts = cb.data.split(":")
-    day_type, section = parts[1], parts[2]
+    # format: gsec:{day_type}:{lesson_time}:{section}
+    day_type   = parts[1]
+    lesson_time = parts[2]
+    section    = parts[3]
     student = await db_get_student(cb.from_user.id)
-    if not student or student["day_type"] != day_type:
+    if not student or student["day_type"] != day_type or student["lesson_time"] != lesson_time:
         return await cb.answer("You are not in this group!", show_alert=True)
     label = SEC_LABELS.get(section, section)
-    items = await db_get_group(day_type, section)
+    items = await db_get_group(day_type, lesson_time, section)
     if not items:
         return await cb.message.edit_text(
             f"<b>{label}</b>\n\n📭 Nothing here yet!",
-            reply_markup=simple_back_kb(f"gsecback:{day_type}"))
+            reply_markup=simple_back_kb(f"gsecback:{day_type}:{lesson_time}"))
     await cb.message.edit_text(
         f"<b>{label}</b> — Sending <b>{len(items)}</b> item(s)...",
         reply_markup=None)
@@ -663,16 +666,18 @@ async def group_section(cb: CallbackQuery):
     await cb.bot.send_message(
         cb.from_user.id,
         f"✅ <b>{label}</b> — all files sent!",
-        reply_markup=simple_back_kb(f"gsecback:{day_type}"),
+        reply_markup=simple_back_kb(f"gsecback:{day_type}:{lesson_time}"),
         parse_mode="HTML")
 
 @router.callback_query(F.data.startswith("gsecback:"))
 async def gsec_back(cb: CallbackQuery):
-    day_type = cb.data[9:]
+    parts = cb.data.split(":")
+    day_type    = parts[1]
+    lesson_time = ":".join(parts[2:])
     label = "Odd" if day_type == "odd" else "Even"
     await cb.message.edit_text(
-        f"👥 <b>{label} Days</b>\n\nYour materials:",
-        reply_markup=group_sec_kb(day_type))
+        f"👥 <b>{label} Days — {lesson_time}</b>\n\nYour materials:",
+        reply_markup=group_sec_kb(day_type, lesson_time))
 
 # ── Universal
 @router.callback_query(F.data == "m:universal")
@@ -1521,7 +1526,7 @@ async def cmd_groups(m: Message, state: FSMContext):
         label = "Odd" if student["day_type"] == "odd" else "Even"
         await m.answer(
             f"👥 <b>{label} Days</b> — ⏰ <b>{student['lesson_time']}</b>\n\nYour materials:",
-            reply_markup=group_sec_kb(student["day_type"]))
+            reply_markup=group_sec_kb(student["day_type"], student["lesson_time"]))
     else:
         await m.answer("Choose your group type:", reply_markup=day_type_kb())
 
