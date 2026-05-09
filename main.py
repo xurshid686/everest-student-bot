@@ -691,27 +691,30 @@ async def sc_save(m: Message, state: FSMContext):
 async def cmd_add_group(m: Message, state: FSMContext):
     if not isa(m.from_user.id): return await m.answer("Not authorized.")
     await state.set_state(AddGroup.section)
-    sec_list = "\n".join(f"  <code>{k}</code>" for _, k in GROUP_SECTIONS)
-    await m.answer(f"Add group content.\n\nSend section key:\n{sec_list}")
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [btn(lbl, f"ag_sec:{key}")] for lbl, key in GROUP_SECTIONS
+    ])
+    await m.answer("Add group content.\n\nChoose section:", reply_markup=kb)
 
-@router.message(AddGroup.section, F.text)
-async def ag_section(m: Message, state: FSMContext):
-    s = m.text.strip().lower()
+@router.callback_query(F.data.startswith("ag_sec:"), AddGroup.section)
+async def ag_section_cb(cb: CallbackQuery, state: FSMContext):
+    s = cb.data.split(":", 1)[1]
     valid = [k for _, k in GROUP_SECTIONS]
     if s not in valid:
         return await m.answer("Invalid. Send one of: " + ", ".join(valid))
     await state.update_data(section=s)
     await state.set_state(AddGroup.day_type)
-    await m.answer(f"Section: <code>{s}</code>\n\nDay type: <code>odd</code> or <code>even</code>")
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [btn("🔵 Odd Days", "ag_day:odd"), btn("🟢 Even Days", "ag_day:even")]
+    ])
+    await cb.message.edit_text(f"Section: <b>{SEC_LABELS.get(s, s)}</b>\n\nChoose day type:", reply_markup=kb)
 
-@router.message(AddGroup.day_type, F.text)
-async def ag_day(m: Message, state: FSMContext):
-    v = m.text.strip().lower()
-    if v not in ("odd", "even"):
-        return await m.answer("Send <code>odd</code> or <code>even</code>")
+@router.callback_query(F.data.startswith("ag_day:"), AddGroup.day_type)
+async def ag_day_cb(cb: CallbackQuery, state: FSMContext):
+    v = cb.data.split(":", 1)[1]
     await state.update_data(day_type=v)
     await state.set_state(AddGroup.title)
-    await m.answer(f"Day: <b>{'Odd' if v=='odd' else 'Even'} Days</b>\n\nSend the <b>title</b>:")
+    await cb.message.edit_text(f"Day: <b>{'Odd' if v=='odd' else 'Even'} Days</b>\n\nSend the <b>title</b>:")
 
 @router.message(AddGroup.title, F.text)
 async def ag_title(m: Message, state: FSMContext):
