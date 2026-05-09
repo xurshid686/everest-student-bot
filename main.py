@@ -749,25 +749,64 @@ async def cmd_admin(m: Message):
 async def cmd_set_code(m: Message, state: FSMContext):
     if not isa(m.from_user.id): return await m.answer("Not authorized.")
     await state.set_state(SetCode.day_type)
-    await m.answer("Set join code.\n\nDay type: <code>odd</code> or <code>even</code>")
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [btn("🔵 Odd Days", "sc_day:odd"), btn("🟢 Even Days", "sc_day:even")],
+        [btn("❌ Cancel", "sc_cancel")]
+    ])
+    await m.answer("🔐 Set join code.\n\nChoose day type:", reply_markup=kb)
 
-@router.message(SetCode.day_type, F.text)
-async def sc_day(m: Message, state: FSMContext):
-    v = m.text.strip().lower()
-    if v not in ("odd", "even"):
-        return await m.answer("Send <code>odd</code> or <code>even</code>")
+@router.callback_query(F.data == "sc_cancel")
+async def sc_cancel(cb: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await cb.message.edit_text("❌ Cancelled.")
+
+@router.callback_query(F.data.startswith("sc_day:"), SetCode.day_type)
+async def sc_day_cb(cb: CallbackQuery, state: FSMContext):
+    v = cb.data.split(":")[1]
     await state.update_data(day_type=v)
     await state.set_state(SetCode.lesson_time)
-    await m.answer(f"Day: <b>{v}</b>\n\nLesson time: <code>9:30</code> / <code>14:30</code> / <code>16:30</code> / <code>18:30</code>")
+    label = "🔵 Odd Days" if v == "odd" else "🟢 Even Days"
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        *[[btn(f"🕐 {t}", f"sc_time:{v}:{t}")] for t in LESSON_TIMES],
+        [btn("⬅️ Back", "sc_back:day"), btn("❌ Cancel", "sc_cancel")]
+    ])
+    await cb.message.edit_text(f"Day: <b>{label}</b>\n\nChoose lesson time:", reply_markup=kb)
 
-@router.message(SetCode.lesson_time, F.text)
-async def sc_time(m: Message, state: FSMContext):
-    t = m.text.strip()
-    if t not in LESSON_TIMES:
-        return await m.answer(f"Valid times: {', '.join(LESSON_TIMES)}")
+@router.callback_query(F.data == "sc_back:day")
+async def sc_back_day(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(SetCode.day_type)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [btn("🔵 Odd Days", "sc_day:odd"), btn("🟢 Even Days", "sc_day:even")],
+        [btn("❌ Cancel", "sc_cancel")]
+    ])
+    await cb.message.edit_text("🔐 Set join code.\n\nChoose day type:", reply_markup=kb)
+
+@router.callback_query(F.data.startswith("sc_time:"), SetCode.lesson_time)
+async def sc_time_cb(cb: CallbackQuery, state: FSMContext):
+    parts = cb.data.split(":")
+    v = parts[1]
+    t = ":".join(parts[2:])
     await state.update_data(lesson_time=t)
     await state.set_state(SetCode.code)
-    await m.answer(f"Time: <b>{t}</b>\n\nNow send the access code:")
+    label = "🔵 Odd Days" if v == "odd" else "🟢 Even Days"
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [btn("⬅️ Back", f"sc_back:time:{v}"), btn("❌ Cancel", "sc_cancel")]
+    ])
+    await cb.message.edit_text(
+        f"Day: <b>{label}</b> | Time: <b>{t}</b>\n\nNow type the <b>access code</b>:",
+        reply_markup=kb)
+
+@router.callback_query(F.data.startswith("sc_back:time:"))
+async def sc_back_time(cb: CallbackQuery, state: FSMContext):
+    v = cb.data.split(":")[2]
+    await state.update_data(day_type=v)
+    await state.set_state(SetCode.lesson_time)
+    label = "🔵 Odd Days" if v == "odd" else "🟢 Even Days"
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        *[[btn(f"🕐 {t}", f"sc_time:{v}:{t}")] for t in LESSON_TIMES],
+        [btn("⬅️ Back", "sc_back:day"), btn("❌ Cancel", "sc_cancel")]
+    ])
+    await cb.message.edit_text(f"Day: <b>{label}</b>\n\nChoose lesson time:", reply_markup=kb)
 
 @router.message(SetCode.code, F.text)
 async def sc_save(m: Message, state: FSMContext):
@@ -1249,32 +1288,60 @@ async def do_del_mcontent(m: Message, state: FSMContext):
 async def cmd_reminder(m: Message, state: FSMContext):
     if not isa(m.from_user.id): return await m.answer("Not authorized.")
     await state.set_state(Reminder.day_type)
-    await m.answer(
-        "📢 Send reminder.\n\n"
-        "Day type: <code>odd</code> / <code>even</code> / <code>all</code>")
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [btn("🔵 Odd Days", "rem_day:odd"), btn("🟢 Even Days", "rem_day:even")],
+        [btn("📣 All Students", "rem_day:all")],
+        [btn("❌ Cancel", "rem_cancel")]
+    ])
+    await m.answer("📢 <b>Send Reminder</b>\n\nChoose group:", reply_markup=kb)
 
-@router.message(Reminder.day_type, F.text)
-async def rem_day(m: Message, state: FSMContext):
-    v = m.text.strip().lower()
-    if v not in ("odd", "even", "all"):
-        return await m.answer("Send: <code>odd</code>, <code>even</code>, or <code>all</code>")
+@router.callback_query(F.data == "rem_cancel")
+async def rem_cancel(cb: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await cb.message.edit_text("❌ Cancelled.")
+
+@router.callback_query(F.data.startswith("rem_day:"), Reminder.day_type)
+async def rem_day_cb(cb: CallbackQuery, state: FSMContext):
+    v = cb.data.split(":")[1]
     await state.update_data(day_type=v)
     if v == "all":
         await state.update_data(lesson_time="all")
         await state.set_state(Reminder.message)
-        await m.answer("Sending to ALL students.\n\nType your message:")
+        kb = InlineKeyboardMarkup(inline_keyboard=[[btn("❌ Cancel", "rem_cancel")]])
+        await cb.message.edit_text("📣 Sending to <b>ALL students</b>.\n\nType your message:", reply_markup=kb)
     else:
         await state.set_state(Reminder.lesson_time)
-        await m.answer(f"Day: <b>{'Odd' if v=='odd' else 'Even'} Days</b>\n\nTime: <code>9:30</code> / <code>14:30</code> / <code>16:30</code> / <code>18:30</code> / <code>all</code>")
+        label = "🔵 Odd Days" if v == "odd" else "🟢 Even Days"
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            *[[btn(f"🕐 {t}", f"rem_time:{v}:{t}")] for t in LESSON_TIMES],
+            [btn("📣 All times", f"rem_time:{v}:all")],
+            [btn("⬅️ Back", "rem_back:day"), btn("❌ Cancel", "rem_cancel")]
+        ])
+        await cb.message.edit_text(f"Day: <b>{label}</b>\n\nChoose time:", reply_markup=kb)
 
-@router.message(Reminder.lesson_time, F.text)
-async def rem_time(m: Message, state: FSMContext):
-    t = m.text.strip()
-    if t != "all" and t not in LESSON_TIMES:
-        return await m.answer(f"Valid: {', '.join(LESSON_TIMES)} or <code>all</code>")
+@router.callback_query(F.data == "rem_back:day")
+async def rem_back_day(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(Reminder.day_type)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [btn("🔵 Odd Days", "rem_day:odd"), btn("🟢 Even Days", "rem_day:even")],
+        [btn("📣 All Students", "rem_day:all")],
+        [btn("❌ Cancel", "rem_cancel")]
+    ])
+    await cb.message.edit_text("📢 <b>Send Reminder</b>\n\nChoose group:", reply_markup=kb)
+
+@router.callback_query(F.data.startswith("rem_time:"), Reminder.lesson_time)
+async def rem_time_cb(cb: CallbackQuery, state: FSMContext):
+    parts = cb.data.split(":")
+    v = parts[1]
+    t = ":".join(parts[2:])
     await state.update_data(lesson_time=t)
     await state.set_state(Reminder.message)
-    await m.answer("Now type your reminder message:")
+    label = "🔵 Odd" if v == "odd" else "🟢 Even"
+    time_label = "All times" if t == "all" else t
+    kb = InlineKeyboardMarkup(inline_keyboard=[[btn("❌ Cancel", "rem_cancel")]])
+    await cb.message.edit_text(
+        f"Group: <b>{label} Days — {time_label}</b>\n\nType your reminder message:",
+        reply_markup=kb)
 
 @router.message(Reminder.message, F.text)
 async def rem_send(m: Message, state: FSMContext):
