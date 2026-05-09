@@ -1,18 +1,24 @@
 import asyncpg
 import os
+import ssl
 
 _pool = None
 
 async def get_pool():
     global _pool
     if _pool is None:
-        _pool = await asyncpg.create_pool(os.getenv("DATABASE_URL"), ssl="require")
+        db_url = os.getenv("DATABASE_URL")
+        if not db_url:
+            raise RuntimeError("DATABASE_URL environment variable is not set! Please add it in Railway.")
+        # Supabase requires SSL — handle both URL formats
+        if "sslmode" not in db_url:
+            db_url = db_url + "?sslmode=require"
+        _pool = await asyncpg.create_pool(db_url)
     return _pool
 
 async def init_db():
     pool = await get_pool()
     async with pool.acquire() as conn:
-        # Create tables only if they do NOT exist — existing data is preserved
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS content (
                 id          SERIAL PRIMARY KEY,
@@ -108,10 +114,4 @@ async def get_stats():
         recent = [dict(r) for r in await conn.fetch(
             "SELECT DISTINCT ON (user_id) user_id, username, full_name, accessed_at FROM stats ORDER BY user_id, accessed_at DESC LIMIT 10"
         )]
-        return {
-            "total_users": total_users,
-            "today": today,
-            "groups": groups,
-            "sections": sections,
-            "recent": recent
-        }
+        return {"total_users": total_users, "today": today, "groups": groups, "sections": sections, "recent": recent}
