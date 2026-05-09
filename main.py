@@ -594,9 +594,14 @@ async def group_section(cb: CallbackQuery):
             reply_markup=simple_back_kb(f"gsecback:{day_type}"))
     await cb.message.edit_text(
         f"<b>{label}</b> — Sending <b>{len(items)}</b> item(s)...",
-        reply_markup=simple_back_kb(f"gsecback:{day_type}"))
+        reply_markup=None)
     for item in items:
         await send_item(cb.bot, cb.from_user.id, item)
+    await cb.bot.send_message(
+        cb.from_user.id,
+        f"✅ <b>{label}</b> — all files sent!",
+        reply_markup=simple_back_kb(f"gsecback:{day_type}"),
+        parse_mode="HTML")
 
 @router.callback_query(F.data.startswith("gsecback:"))
 async def gsec_back(cb: CallbackQuery):
@@ -627,9 +632,14 @@ async def univ_cat(cb: CallbackQuery):
             reply_markup=simple_back_kb("m:universal"))
     await cb.message.edit_text(
         f"<b>{cat['name']}</b> — Sending <b>{len(items)}</b> item(s)...",
-        reply_markup=simple_back_kb("m:universal"))
+        reply_markup=None)
     for item in items:
         await send_item(cb.bot, cb.from_user.id, item)
+    await cb.bot.send_message(
+        cb.from_user.id,
+        f"✅ <b>{cat['name']}</b> — all files sent!",
+        reply_markup=simple_back_kb("m:universal"),
+        parse_mode="HTML")
 
 # ── Mock Tests
 @router.callback_query(F.data == "m:mock")
@@ -706,9 +716,14 @@ async def mock_test(cb: CallbackQuery):
             reply_markup=simple_back_kb(back_target))
     await cb.message.edit_text(
         f"📤 Sending <b>Test {test_num}</b> — <b>{len(items)}</b> file(s)...",
-        reply_markup=simple_back_kb(back_target))
+        reply_markup=None)
     for item in items:
         await send_item(cb.bot, cb.from_user.id, item)
+    await cb.bot.send_message(
+        cb.from_user.id,
+        f"✅ <b>Test {test_num}</b> — all files sent!",
+        reply_markup=simple_back_kb(back_target),
+        parse_mode="HTML")
 
 # ─────────────────────────────────────────────
 #  ADMIN HANDLERS
