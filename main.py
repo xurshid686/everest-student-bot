@@ -20,7 +20,10 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     Message, CallbackQuery,
-    InlineKeyboardMarkup, InlineKeyboardButton
+    InlineKeyboardMarkup, InlineKeyboardButton,
+    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
+    BotCommand, BotCommandScopeDefault,
+    MenuButtonCommands
 )
 
 # ─────────────────────────────────────────────
@@ -1442,6 +1445,27 @@ async def main():
 
     log.info("Bot starting...")
     await bot.delete_webhook(drop_pending_updates=True)
+
+    # Set up the persistent Menu button with commands
+    await bot.set_my_commands([
+        BotCommand(command="start",      description="Open main menu"),
+        BotCommand(command="admin",      description="Admin panel"),
+        BotCommand(command="set_code",   description="Set join code for a group"),
+        BotCommand(command="students",   description="View all registered students"),
+        BotCommand(command="add_group",  description="Add content to a group"),
+        BotCommand(command="list_group", description="List all group content"),
+        BotCommand(command="del_group",  description="Delete group content by ID"),
+        BotCommand(command="add_mock",   description="Add mock test (button-based)"),
+        BotCommand(command="add_ucat",   description="Add Universal category"),
+        BotCommand(command="del_ucat",   description="Delete Universal category"),
+        BotCommand(command="add_ucontent", description="Add content to Universal category"),
+        BotCommand(command="del_ucontent", description="Delete Universal content by ID"),
+        BotCommand(command="reminder",   description="Send reminder to a group"),
+        BotCommand(command="broadcast",  description="Send message to all students"),
+        BotCommand(command="cancel",     description="Cancel current action"),
+    ], scope=BotCommandScopeDefault())
+    await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 
 if __name__ == "__main__":
