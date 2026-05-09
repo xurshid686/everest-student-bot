@@ -345,7 +345,10 @@ def group_sec_kb(day_type):
     return ikb([
         [btn(lbl, f"gsec:{day_type}:{key}")]
         for lbl, key in GROUP_SECTIONS
-    ] + [back_btn("back:main")])
+    ] + [
+        [btn("🔄 Change Group", "change_group")],
+        back_btn("back:main")
+    ])
 
 async def univ_kb():
     cats = await db_get_ucats()
@@ -491,6 +494,13 @@ async def groups_menu(cb: CallbackQuery):
             reply_markup=group_sec_kb(student["day_type"]))
     else:
         await cb.message.edit_text("Choose your group type:", reply_markup=day_type_kb())
+
+@router.callback_query(F.data == "change_group")
+async def change_group(cb: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await cb.message.edit_text(
+        "🔄 <b>Change Group</b>\n\nChoose your new group type:",
+        reply_markup=day_type_kb())
 
 @router.callback_query(F.data.startswith("day:"))
 async def pick_day(cb: CallbackQuery):
