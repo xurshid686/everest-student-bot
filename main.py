@@ -118,11 +118,21 @@ async def init_db():
                 id          SERIAL PRIMARY KEY,
                 day_type    TEXT NOT NULL,
                 section     TEXT NOT NULL,
+                subcategory TEXT DEFAULT '',
                 title       TEXT NOT NULL,
                 body        TEXT DEFAULT '',
                 file_id     TEXT DEFAULT '',
                 file_type   TEXT DEFAULT '',
                 created_at  TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        await c.execute("""
+            CREATE TABLE IF NOT EXISTS group_subcategories (
+                id       SERIAL PRIMARY KEY,
+                section  TEXT NOT NULL,
+                name     TEXT NOT NULL,
+                position INT  DEFAULT 0,
+                UNIQUE(section, name)
             )
         """)
         await c.execute("""
@@ -228,21 +238,49 @@ async def db_set_code(day_type, lesson_time, code):
             ON CONFLICT(day_type,lesson_time) DO UPDATE SET code=$3
         """, day_type, lesson_time, code)
 
-async def db_add_group(day_type, section, title, body="", file_id="", file_type=""):
+async def db_add_gsub(section, name):
+    p = await get_pool()
+    async with p.acquire() as c:
+        await c.execute(
+            "INSERT INTO group_subcategories(section,name) VALUES($1,$2) ON CONFLICT DO NOTHING",
+            section, name)
+
+async def db_get_gsubs(section):
+    p = await get_pool()
+    async with p.acquire() as c:
+        rows = await c.fetch(
+            "SELECT * FROM group_subcategories WHERE section=$1 ORDER BY position, id",
+            section)
+        return [dict(r) for r in rows]
+
+async def db_del_gsub(gid):
+    p = await get_pool()
+    async with p.acquire() as c:
+        await c.execute("DELETE FROM group_subcategories WHERE id=$1", int(gid))
+
+async def db_add_group(day_type, lesson_time, section, subcategory, title, body="", file_id="", file_type=""):
     p = await get_pool()
     async with p.acquire() as c:
         await c.execute("""
-            INSERT INTO group_content(day_type,section,title,body,file_id,file_type)
-            VALUES($1,$2,$3,$4,$5,$6)
-        """, day_type, section, title, body, file_id, file_type)
+            INSERT INTO group_content(day_type,lesson_time,section,subcategory,title,body,file_id,file_type)
+            VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+        """, day_type, lesson_time, section, subcategory, title, body, file_id, file_type)
 
-async def db_get_group(day_type, lesson_time, section):
+async def db_get_group(day_type, lesson_time, section, subcategory=None):
     p = await get_pool()
     async with p.acquire() as c:
-        rows = await c.fetch("""
-            SELECT * FROM group_content
-            WHERE day_type=$1 AND lesson_time=$2 AND section=$3 ORDER BY created_at DESC
-        """, day_type, lesson_time, section)
+        if subcategory is not None:
+            rows = await c.fetch("""
+                SELECT * FROM group_content
+                WHERE day_type=$1 AND lesson_time=$2 AND section=$3 AND subcategory=$4
+                ORDER BY created_at DESC
+            """, day_type, lesson_time, section, subcategory)
+        else:
+            rows = await c.fetch("""
+                SELECT * FROM group_content
+                WHERE day_type=$1 AND lesson_time=$2 AND section=$3
+                ORDER BY created_at DESC
+            """, day_type, lesson_time, section)
         return [dict(r) for r in rows]
 
 async def db_del_group(cid):
@@ -433,10 +471,11 @@ class SetCode(StatesGroup):
     code        = State()
 
 class AddGroup(StatesGroup):
-    section  = State()
-    day_type = State()
-    title    = State()
-    content  = State()
+    section     = State()
+    day_type    = State()
+    subcategory = State()
+    title       = State()
+    content     = State()
 
 class DelGroup(StatesGroup):
     cid = State()
@@ -646,27 +685,65 @@ async def check_code(m: Message, state: FSMContext):
 async def group_section(cb: CallbackQuery):
     parts = cb.data.split(":")
     # format: gsec:{day_type}:{lesson_time}:{section}
-    day_type   = parts[1]
+    day_type    = parts[1]
     lesson_time = parts[2]
-    section    = parts[3]
+    section     = parts[3]
     student = await db_get_student(cb.from_user.id)
     if not student or student["day_type"] != day_type or student["lesson_time"] != lesson_time:
         return await cb.answer("You are not in this group!", show_alert=True)
     label = SEC_LABELS.get(section, section)
-    items = await db_get_group(day_type, lesson_time, section)
+    back_cb = f"gsecback:{day_type}:{lesson_time}"
+    # Check if sub-categories exist for this section
+    subs = await db_get_gsubs(section)
+    if subs:
+        kb = ikb([
+            [btn(s["name"], f"gsubcat:{day_type}:{lesson_time}:{section}:{s['id']}:{s['name']}")]
+            for s in subs
+        ] + [back_btn(back_cb)])
+        await cb.message.edit_text(
+            f"<b>{label}</b>\n\nChoose category:",
+            reply_markup=kb)
+    else:
+        items = await db_get_group(day_type, lesson_time, section)
+        if not items:
+            return await cb.message.edit_text(
+                f"<b>{label}</b>\n\n📭 Nothing here yet!",
+                reply_markup=simple_back_kb(back_cb))
+        await cb.message.edit_text(
+            f"<b>{label}</b> — Sending <b>{len(items)}</b> item(s)...",
+            reply_markup=None)
+        for item in items:
+            await send_item(cb.bot, cb.from_user.id, item)
+        await cb.bot.send_message(
+            cb.from_user.id,
+            f"✅ <b>{label}</b> — all files sent!",
+            reply_markup=simple_back_kb(back_cb),
+            parse_mode="HTML")
+
+@router.callback_query(F.data.startswith("gsubcat:"))
+async def group_subcat(cb: CallbackQuery):
+    parts = cb.data.split(":")
+    day_type    = parts[1]
+    lesson_time = parts[2]
+    section     = parts[3]
+    sub_id      = parts[4]
+    sub_name    = ":".join(parts[5:])
+    label = SEC_LABELS.get(section, section)
+    back_cb = f"gsec:{day_type}:{lesson_time}:{section}"
+    items = await db_get_group(day_type, lesson_time, section, sub_name)
     if not items:
         return await cb.message.edit_text(
-            f"<b>{label}</b>\n\n📭 Nothing here yet!",
-            reply_markup=simple_back_kb(f"gsecback:{day_type}:{lesson_time}"))
+            f"<b>{label}</b> — <b>{sub_name}</b>\n\n📭 Nothing here yet!",
+            reply_markup=simple_back_kb(back_cb))
     await cb.message.edit_text(
-        f"<b>{label}</b> — Sending <b>{len(items)}</b> item(s)...",
+        f"<b>{label}</b> — <b>{sub_name}</b> — Sending <b>{len(items)}</b> item(s)...",
         reply_markup=None)
     for item in items:
         await send_item(cb.bot, cb.from_user.id, item)
     await cb.bot.send_message(
         cb.from_user.id,
-        f"✅ <b>{label}</b> — all files sent!",
-        reply_markup=simple_back_kb(f"gsecback:{day_type}:{lesson_time}"),
+        f"✅ <b>{sub_name}</b> — all files sent!",
+        reply_markup=simple_back_kb(back_cb),
         parse_mode="HTML")
 
 @router.callback_query(F.data.startswith("gsecback:"))
@@ -805,6 +882,8 @@ async def cmd_admin(m: Message):
          btn("📋 List Content",       "adm_cmd:list_group")],
         [btn("🗑 Delete Group Content","adm_cmd:del_group"),
          btn("🔐 Set Join Code",      "adm_cmd:set_code")],
+        [btn("➕ Add Sub-category",   "adm_cmd:add_gsub"),
+         btn("🗑 Del Sub-category",   "adm_cmd:del_gsub")],
         # Mock
         [btn("➕ Add Mock Test",      "adm_cmd:add_mock"),
          btn("🗑 Delete Mock",        "adm_cmd:del_mcontent")],
@@ -839,6 +918,8 @@ async def adm_cmd_cb(cb: CallbackQuery, state: FSMContext):
     # Map command -> handler call
     handlers = {
         "add_group":    lambda: cmd_add_group(fake, state),
+        "add_gsub":     lambda: cmd_add_gsub(fake, state),
+        "del_gsub":     lambda: cmd_del_gsub(fake, state),
         "list_group":   lambda: cmd_list_group(fake),
         "del_group":    lambda: cmd_del_group(fake, state),
         "set_code":     lambda: cmd_set_code(fake, state),
@@ -991,13 +1072,45 @@ async def ag_section_cb(cb: CallbackQuery, state: FSMContext):
     if section not in valid:
         return await cb.answer("Invalid section.")
     await state.update_data(section=section)
+    label = "🔵 Odd" if day_type == "odd" else "🟢 Even"
+    sec_label = SEC_LABELS.get(section, section)
+    # Check if sub-categories exist for this section
+    subs = await db_get_gsubs(section)
+    if subs:
+        await state.set_state(AddGroup.subcategory)
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [btn(s["name"], f"ag_sub:{s['id']}:{s['name']}")]
+            for s in subs
+        ] + [[btn("⬅️ Back", f"ag_back:sec:{day_type}:{lesson_time}"), btn("❌ Cancel", "ag_cancel")]])
+        await cb.message.edit_text(
+            f"Group: <b>{label} Days — {lesson_time}</b>\nSection: <b>{sec_label}</b>\n\nChoose sub-category:",
+            reply_markup=kb)
+    else:
+        await state.update_data(subcategory="")
+        await state.set_state(AddGroup.title)
+        back_kb = InlineKeyboardMarkup(inline_keyboard=[
+            [btn("⬅️ Back", f"ag_back:sec:{day_type}:{lesson_time}"), btn("❌ Cancel", "ag_cancel")]
+        ])
+        await cb.message.edit_text(
+            f"Group: <b>{label} Days — {lesson_time}</b>\nSection: <b>{sec_label}</b>\n\nSend the <b>title</b>:",
+            reply_markup=back_kb)
+
+@router.callback_query(F.data.startswith("ag_sub:"), AddGroup.subcategory)
+async def ag_sub_cb(cb: CallbackQuery, state: FSMContext):
+    parts = cb.data.split(":", 2)
+    sub_name = parts[2]
+    await state.update_data(subcategory=sub_name)
     await state.set_state(AddGroup.title)
+    d = await state.get_data()
+    day_type = d["day_type"]; lesson_time = d["lesson_time"]; section = d["section"]
     label = "🔵 Odd" if day_type == "odd" else "🟢 Even"
     back_kb = InlineKeyboardMarkup(inline_keyboard=[
         [btn("⬅️ Back", f"ag_back:sec:{day_type}:{lesson_time}"), btn("❌ Cancel", "ag_cancel")]
     ])
     await cb.message.edit_text(
-        f"Group: <b>{label} Days — {lesson_time}</b>\nSection: <b>{SEC_LABELS.get(section, section)}</b>\n\nSend the <b>title</b>:",
+        f"Group: <b>{label} Days — {lesson_time}</b>\n"
+        f"Section: <b>{SEC_LABELS.get(section, section)}</b> — <b>{sub_name}</b>\n\n"
+        f"Send the <b>title</b>:",
         reply_markup=back_kb)
 
 @router.callback_query(F.data.startswith("ag_back:sec:"))
@@ -1021,11 +1134,86 @@ async def ag_title(m: Message, state: FSMContext):
 @router.message(AddGroup.content)
 async def ag_content(m: Message, state: FSMContext):
     d = await state.get_data()
-    day_type, section, title = d["day_type"], d["section"], d["title"]
+    day_type    = d["day_type"]
+    lesson_time = d["lesson_time"]
+    section     = d["section"]
+    subcategory = d.get("subcategory", "")
+    title       = d["title"]
+    sub_label   = f" — {subcategory}" if subcategory else ""
     await save_content_from_msg(
         m, state,
-        lambda **kw: db_add_group(day_type, section, title, **kw)
+        lambda **kw: db_add_group(day_type, lesson_time, section, subcategory, title, **kw)
     )
+    await m.answer(
+        f"✅ Uploaded to <b>{SEC_LABELS.get(section, section)}{sub_label}</b>!")
+
+# ── Manage group sub-categories
+class AddGSub(StatesGroup):
+    section = State()
+    name    = State()
+
+class DelGSub(StatesGroup):
+    gid = State()
+
+@router.message(Command("add_gsub"))
+async def cmd_add_gsub(m: Message, state: FSMContext):
+    if not isa(m.from_user.id): return await m.answer("Not authorized.")
+    await state.set_state(AddGSub.section)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [btn(lbl, f"gsub_sec:{key}")] for lbl, key in GROUP_SECTIONS
+    ] + [[btn("❌ Cancel", "gsub_cancel")]])
+    await m.answer("➕ <b>Add Sub-category</b>\n\nChoose section:", reply_markup=kb)
+
+@router.callback_query(F.data == "gsub_cancel")
+async def gsub_cancel(cb: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await cb.message.edit_text("❌ Cancelled.")
+
+@router.callback_query(F.data.startswith("gsub_sec:"), AddGSub.section)
+async def gsub_sec_cb(cb: CallbackQuery, state: FSMContext):
+    section = cb.data.split(":", 1)[1]
+    await state.update_data(section=section)
+    await state.set_state(AddGSub.name)
+    subs = await db_get_gsubs(section)
+    existing = ", ".join(s["name"] for s in subs) if subs else "none yet"
+    kb = InlineKeyboardMarkup(inline_keyboard=[[btn("❌ Cancel", "gsub_cancel")]])
+    await cb.message.edit_text(
+        f"Section: <b>{SEC_LABELS.get(section, section)}</b>\n"
+        f"Existing: {existing}\n\n"
+        f"Type the <b>name</b> for the new sub-category:",
+        reply_markup=kb)
+
+@router.message(AddGSub.name, F.text)
+async def gsub_name(m: Message, state: FSMContext):
+    d = await state.get_data()
+    section = d["section"]
+    name = m.text.strip()
+    await db_add_gsub(section, name)
+    await state.clear()
+    await m.answer(f"✅ Sub-category <b>{name}</b> added to <b>{SEC_LABELS.get(section, section)}</b>!")
+
+@router.message(Command("del_gsub"))
+async def cmd_del_gsub(m: Message, state: FSMContext):
+    if not isa(m.from_user.id): return await m.answer("Not authorized.")
+    await state.set_state(DelGSub.section if hasattr(DelGSub, "section") else DelGSub.gid)
+    # Show all sections with their subs as buttons
+    kb_rows = []
+    for lbl, key in GROUP_SECTIONS:
+        subs = await db_get_gsubs(key)
+        for s in subs:
+            kb_rows.append([btn(f"{lbl} → {s['name']}", f"gsub_del:{s['id']}")])
+    if not kb_rows:
+        return await m.answer("No sub-categories to delete.")
+    kb_rows.append([btn("❌ Cancel", "gsub_cancel")])
+    await m.answer("🗑 <b>Delete Sub-category</b>\n\nChoose one:", 
+                   reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
+
+@router.callback_query(F.data.startswith("gsub_del:"))
+async def gsub_del_cb(cb: CallbackQuery, state: FSMContext):
+    gid = int(cb.data.split(":")[1])
+    await db_del_gsub(gid)
+    await state.clear()
+    await cb.message.edit_text("✅ Sub-category deleted!")
 
 # ── List / delete group content
 @router.message(Command("list_group"))
