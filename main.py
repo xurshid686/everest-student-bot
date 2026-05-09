@@ -687,63 +687,82 @@ async def sc_save(m: Message, state: FSMContext):
         f"Code: <code>{m.text.strip()}</code>")
 
 # ── Add group content
-def ag_section_kb():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        *[[btn(lbl, f"ag_sec:{key}")] for lbl, key in GROUP_SECTIONS],
-        [btn("❌ Cancel", "ag_cancel")]
-    ])
+def ag_group_kb():
+    """Step 1: Choose Odd/Even + Time"""
+    rows = []
+    for t in LESSON_TIMES:
+        rows.append([
+            btn(f"🔵 Odd {t}", f"ag_grp:odd:{t}"),
+            btn(f"🟢 Even {t}", f"ag_grp:even:{t}")
+        ])
+    rows.append([btn("❌ Cancel", "ag_cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
-def ag_day_kb(section):
+def ag_section_kb(day_type, lesson_time):
+    """Step 2: Choose section"""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [btn("🔵 Odd Days", f"ag_day:{section}:odd"), btn("🟢 Even Days", f"ag_day:{section}:even")],
-        [btn("⬅️ Back", "ag_back:section")]
+        *[[btn(lbl, f"ag_sec:{day_type}:{lesson_time}:{key}")] for lbl, key in GROUP_SECTIONS],
+        [btn("⬅️ Back", "ag_back:group"), btn("❌ Cancel", "ag_cancel")]
     ])
 
 @router.message(Command("add_group"))
 async def cmd_add_group(m: Message, state: FSMContext):
     if not isa(m.from_user.id): return await m.answer("Not authorized.")
-    await state.set_state(AddGroup.section)
-    await m.answer("Add group content.\n\nChoose section:", reply_markup=ag_section_kb())
+    await state.set_state(AddGroup.day_type)
+    await m.answer("Add group content.\n\nChoose group:", reply_markup=ag_group_kb())
 
 @router.callback_query(F.data == "ag_cancel")
 async def ag_cancel(cb: CallbackQuery, state: FSMContext):
     await state.clear()
     await cb.message.edit_text("❌ Cancelled.")
 
-@router.callback_query(F.data == "ag_back:section")
-async def ag_back_section(cb: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data == "ag_back:group")
+async def ag_back_group(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(AddGroup.day_type)
+    await cb.message.edit_text("Add group content.\n\nChoose group:", reply_markup=ag_group_kb())
+
+@router.callback_query(F.data.startswith("ag_grp:"), AddGroup.day_type)
+async def ag_group_cb(cb: CallbackQuery, state: FSMContext):
+    parts = cb.data.split(":")
+    day_type = parts[1]
+    lesson_time = ":".join(parts[2:])
+    await state.update_data(day_type=day_type, lesson_time=lesson_time)
     await state.set_state(AddGroup.section)
-    await cb.message.edit_text("Add group content.\n\nChoose section:", reply_markup=ag_section_kb())
+    label = "🔵 Odd" if day_type == "odd" else "🟢 Even"
+    await cb.message.edit_text(
+        f"Group: <b>{label} Days — {lesson_time}</b>\n\nChoose section:",
+        reply_markup=ag_section_kb(day_type, lesson_time))
 
 @router.callback_query(F.data.startswith("ag_sec:"), AddGroup.section)
 async def ag_section_cb(cb: CallbackQuery, state: FSMContext):
-    s = cb.data.split(":", 1)[1]
-    valid = [k for _, k in GROUP_SECTIONS]
-    if s not in valid:
-        return await cb.answer("Invalid section.")
-    await state.update_data(section=s)
-    await state.set_state(AddGroup.day_type)
-    await cb.message.edit_text(f"Section: <b>{SEC_LABELS.get(s, s)}</b>\n\nChoose day type:", reply_markup=ag_day_kb(s))
-
-@router.callback_query(F.data.startswith("ag_day:"), AddGroup.day_type)
-async def ag_day_cb(cb: CallbackQuery, state: FSMContext):
     parts = cb.data.split(":")
-    section, v = parts[1], parts[2]
-    await state.update_data(day_type=v, section=section)
+    day_type = parts[1]
+    lesson_time = ":".join(parts[2:-1])
+    section = parts[-1]
+    valid = [k for _, k in GROUP_SECTIONS]
+    if section not in valid:
+        return await cb.answer("Invalid section.")
+    await state.update_data(section=section)
     await state.set_state(AddGroup.title)
-    cancel_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [btn("⬅️ Back", f"ag_back:day:{section}"), btn("❌ Cancel", "ag_cancel")]
+    label = "🔵 Odd" if day_type == "odd" else "🟢 Even"
+    back_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [btn("⬅️ Back", f"ag_back:sec:{day_type}:{lesson_time}"), btn("❌ Cancel", "ag_cancel")]
     ])
     await cb.message.edit_text(
-        f"Section: <b>{SEC_LABELS.get(section, section)}</b> | Day: <b>{'Odd' if v=='odd' else 'Even'} Days</b>\n\nSend the <b>title</b>:",
-        reply_markup=cancel_kb)
+        f"Group: <b>{label} Days — {lesson_time}</b>\nSection: <b>{SEC_LABELS.get(section, section)}</b>\n\nSend the <b>title</b>:",
+        reply_markup=back_kb)
 
-@router.callback_query(F.data.startswith("ag_back:day:"))
-async def ag_back_day(cb: CallbackQuery, state: FSMContext):
-    section = cb.data.split(":", 2)[2]
-    await state.update_data(section=section)
-    await state.set_state(AddGroup.day_type)
-    await cb.message.edit_text(f"Section: <b>{SEC_LABELS.get(section, section)}</b>\n\nChoose day type:", reply_markup=ag_day_kb(section))
+@router.callback_query(F.data.startswith("ag_back:sec:"))
+async def ag_back_sec(cb: CallbackQuery, state: FSMContext):
+    parts = cb.data.split(":")
+    day_type = parts[2]
+    lesson_time = ":".join(parts[3:])
+    await state.update_data(day_type=day_type, lesson_time=lesson_time)
+    await state.set_state(AddGroup.section)
+    label = "🔵 Odd" if day_type == "odd" else "🟢 Even"
+    await cb.message.edit_text(
+        f"Group: <b>{label} Days — {lesson_time}</b>\n\nChoose section:",
+        reply_markup=ag_section_kb(day_type, lesson_time))
 
 @router.message(AddGroup.title, F.text)
 async def ag_title(m: Message, state: FSMContext):
