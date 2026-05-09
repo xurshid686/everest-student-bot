@@ -1,0 +1,23 @@
+Commands for @BotFather → /setcommands:
+
+start - Open main menu
+
+admin - Admin panel
+set_code - Set join code for a group and time
+students - View all registered students
+add_group - Add content to a group
+list_group - List all group content with IDs
+del_group - Delete group content by ID
+add_ucat - Add Universal category
+del_ucat - Delete Universal category
+rename_ucat - Rename Universal category
+add_ucontent - Add content to Universal category
+del_ucontent - Delete Universal content by ID
+add_msec - Add Mock Test section
+del_msec - Delete Mock Test section
+rename_msec - Rename Mock Test section
+add_mcontent - Add content to Mock Test section
+del_mcontent - Delete Mock Test content by ID
+reminder - Send reminder to a group
+broadcast - Send message to all students
+cancel - Cancel current action
