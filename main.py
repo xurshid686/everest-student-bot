@@ -794,33 +794,65 @@ async def mock_test(cb: CallbackQuery):
 @router.message(Command("admin"))
 async def cmd_admin(m: Message):
     if not isa(m.from_user.id): return await m.answer("Not authorized.")
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        # Group
+        [btn("➕ Add Group Content",  "adm_cmd:add_group"),
+         btn("📋 List Content",       "adm_cmd:list_group")],
+        [btn("🗑 Delete Group Content","adm_cmd:del_group"),
+         btn("🔐 Set Join Code",      "adm_cmd:set_code")],
+        # Mock
+        [btn("➕ Add Mock Test",      "adm_cmd:add_mock"),
+         btn("🗑 Delete Mock",        "adm_cmd:del_mcontent")],
+        [btn("📂 Add Mock Section",   "adm_cmd:add_msec"),
+         btn("✏️ Rename Mock Section","adm_cmd:rename_msec")],
+        # Universal
+        [btn("➕ Add Universal Cat",  "adm_cmd:add_ucat"),
+         btn("➕ Add Universal Item", "adm_cmd:add_ucontent")],
+        [btn("🗑 Del Universal Cat",  "adm_cmd:del_ucat"),
+         btn("🗑 Del Universal Item", "adm_cmd:del_ucontent")],
+        # Students & Messages
+        [btn("👥 View Students",      "adm_cmd:students"),
+         btn("📢 Send Reminder",      "adm_cmd:reminder")],
+        [btn("📣 Broadcast All",      "adm_cmd:broadcast"),
+         btn("❌ Cancel Action",      "adm_cmd:cancel")],
+    ])
     await m.answer(
-        "🔧 <b>Admin Panel</b>\n\n"
-        "<b>Group Codes:</b>\n"
-        "/set_code — Set join code\n\n"
-        "<b>Group Content:</b>\n"
-        "/add_group — Add content to a group\n"
-        "/list_group — List all group content (with IDs)\n"
-        "/del_group — Delete group content by ID\n\n"
-        "<b>Universal:</b>\n"
-        "/add_ucat — Add category\n"
-        "/del_ucat — Delete category\n"
-        "/rename_ucat — Rename category\n"
-        "/add_ucontent — Add content to category\n"
-        "/del_ucontent — Delete content by ID\n\n"
-        "<b>Mock Tests:</b>\n"
-        "/add_mock — Add mock test (button-based)\n"
-        "/add_msec — Add section\n"
-        "/del_msec — Delete section\n"
-        "/rename_msec — Rename section\n"
-        "/add_mcontent — Add content to section (legacy)\n"
-        "/del_mcontent — Delete content by ID\n\n"
-        "<b>Messages:</b>\n"
-        "/reminder — Send reminder to group\n"
-        "/broadcast — Send to ALL students\n"
-        "/students — View registered students\n\n"
-        "/cancel — Cancel current action"
+        "🔧 <b>Admin Panel</b>\n"
+        "Tap a button to run a command:",
+        reply_markup=kb
     )
+
+@router.callback_query(F.data.startswith("adm_cmd:"))
+async def adm_cmd_cb(cb: CallbackQuery, state: FSMContext):
+    cmd = cb.data.split(":", 1)[1]
+    await cb.answer()
+    await cb.message.answer(f"/{cmd}")
+    # Trigger the command manually by dispatching a fake message with the command
+    # Instead, just tell user to tap — or re-invoke directly:
+    fake = cb.message
+    fake_user = cb.from_user
+    # Map command -> handler call
+    handlers = {
+        "add_group":    lambda: cmd_add_group(fake, state),
+        "list_group":   lambda: cmd_list_group(fake),
+        "del_group":    lambda: cmd_del_group(fake, state),
+        "set_code":     lambda: cmd_set_code(fake, state),
+        "add_mock":     lambda: cmd_add_mock(fake, state),
+        "del_mcontent": lambda: cmd_del_mcontent(fake, state),
+        "add_msec":     lambda: cmd_add_msec(fake, state),
+        "rename_msec":  lambda: cmd_rename_msec(fake, state),
+        "add_ucat":     lambda: cmd_add_ucat(fake, state),
+        "add_ucontent": lambda: cmd_add_ucontent(fake, state),
+        "del_ucat":     lambda: cmd_del_ucat(fake, state),
+        "del_ucontent": lambda: cmd_del_ucontent(fake, state),
+        "students":     lambda: cmd_students(fake),
+        "reminder":     lambda: cmd_reminder(fake, state),
+        "broadcast":    lambda: cmd_broadcast(fake, state),
+        "cancel":       lambda: cmd_cancel(fake, state),
+    }
+    fn = handlers.get(cmd)
+    if fn:
+        await fn()
 
 # ── Set code
 @router.message(Command("set_code"))
