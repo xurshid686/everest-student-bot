@@ -14,14 +14,27 @@ TOKEN = getenv("BOT_TOKEN")
 
 async def main():
     if not TOKEN:
-        sys.exit("ERROR: BOT_TOKEN not set!")
-    await init_db()
+        print("ERROR: BOT_TOKEN is not set in Railway Variables!")
+        sys.exit(1)
+    if not getenv("DATABASE_URL"):
+        print("ERROR: DATABASE_URL is not set in Railway Variables!")
+        print("Please add: DATABASE_URL = postgresql://postgres:PASSWORD@db.xxx.supabase.co:5432/postgres")
+        sys.exit(1)
+    print("Connecting to Supabase database...")
+    try:
+        await init_db()
+        print("Database connected successfully!")
+    except Exception as e:
+        print(f"Database connection FAILED: {e}")
+        print("Check your DATABASE_URL in Railway Variables")
+        sys.exit(1)
+
     bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp  = Dispatcher(storage=MemoryStorage())
     dp.include_router(admin.router)
     dp.include_router(student.router)
     logging.basicConfig(level=logging.INFO, stream=sys.stdout)
-    print("Bot started with Supabase PostgreSQL - data is permanent!")
+    print("Bot is running! Data is permanently stored in Supabase.")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
