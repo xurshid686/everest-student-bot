@@ -502,7 +502,8 @@ async def pick_day(cb: CallbackQuery):
 @router.callback_query(F.data.startswith("time:"))
 async def pick_time(cb: CallbackQuery):
     parts = cb.data.split(":")
-    day_type, t = parts[1], parts[2]
+    day_type = parts[1]
+    t = ":".join(parts[2:])
     label = "Odd Days" if day_type == "odd" else "Even Days"
     await cb.message.edit_text(
         f"<b>{label}</b> at <b>{t}</b>\n\nConfirm joining this group?",
@@ -511,7 +512,8 @@ async def pick_time(cb: CallbackQuery):
 @router.callback_query(F.data.startswith("join:"))
 async def confirm_join(cb: CallbackQuery, state: FSMContext):
     parts = cb.data.split(":")
-    day_type, t = parts[1], parts[2]
+    day_type = parts[1]
+    t = ":".join(parts[2:])
     await state.update_data(day_type=day_type, lesson_time=t)
     await state.set_state(JoinGroup.code)
     await cb.message.edit_text(
