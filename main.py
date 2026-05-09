@@ -41,6 +41,12 @@ GROUP_SECTIONS = [
 ]
 SEC_LABELS = {k: lbl for lbl, k in GROUP_SECTIONS}
 
+# Mock subsections — listening has parts, reading has passages, others have none
+MOCK_SUBSECTIONS = {
+    "🎧 Listening": ["🎵 Part 1", "🎵 Part 2", "🎵 Part 3", "🎵 Part 4"],
+    "📖 Reading":   ["📄 Passage 1", "📄 Passage 2", "📄 Passage 3"],
+}
+
 # ─────────────────────────────────────────────
 #  DATABASE
 # ─────────────────────────────────────────────
@@ -117,6 +123,8 @@ async def init_db():
             CREATE TABLE IF NOT EXISTS mock_content (
                 id         SERIAL PRIMARY KEY,
                 section_id INT REFERENCES mock_sections(id) ON DELETE CASCADE,
+                subsection TEXT DEFAULT '',
+                test_num   INT  DEFAULT 0,
                 title      TEXT NOT NULL,
                 body       TEXT DEFAULT '',
                 file_id    TEXT DEFAULT '',
@@ -124,6 +132,8 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT NOW()
             )
         """)
+        await c.execute("ALTER TABLE mock_content ADD COLUMN IF NOT EXISTS subsection TEXT DEFAULT ''")
+        await c.execute("ALTER TABLE mock_content ADD COLUMN IF NOT EXISTS test_num INT DEFAULT 0")
         # Seed default mock sections
         for name, pos in [
             ("🎧 Listening", 1), ("📖 Reading", 2),
@@ -282,21 +292,34 @@ async def db_rename_msec(sid, name):
     async with p.acquire() as c:
         await c.execute("UPDATE mock_sections SET name=$2 WHERE id=$1", int(sid), name)
 
-async def db_add_mcontent(sec_id, title, body="", file_id="", file_type=""):
+async def db_add_mcontent(sec_id, title, subsection="", test_num=0, body="", file_id="", file_type=""):
     p = await get_pool()
     async with p.acquire() as c:
         await c.execute("""
-            INSERT INTO mock_content(section_id,title,body,file_id,file_type)
-            VALUES($1,$2,$3,$4,$5)
-        """, int(sec_id), title, body, file_id, file_type)
+            INSERT INTO mock_content(section_id,subsection,test_num,title,body,file_id,file_type)
+            VALUES($1,$2,$3,$4,$5,$6,$7)
+        """, int(sec_id), subsection, int(test_num), title, body, file_id, file_type)
 
-async def db_get_mcontent(sec_id):
+async def db_get_mcontent(sec_id, subsection=None):
+    p = await get_pool()
+    async with p.acquire() as c:
+        if subsection is not None:
+            rows = await c.fetch(
+                "SELECT * FROM mock_content WHERE section_id=$1 AND subsection=$2 ORDER BY test_num, created_at",
+                int(sec_id), subsection)
+        else:
+            rows = await c.fetch(
+                "SELECT * FROM mock_content WHERE section_id=$1 ORDER BY subsection, test_num, created_at",
+                int(sec_id))
+        return [dict(r) for r in rows]
+
+async def db_get_mock_tests(sec_id, subsection):
     p = await get_pool()
     async with p.acquire() as c:
         rows = await c.fetch(
-            "SELECT * FROM mock_content WHERE section_id=$1 ORDER BY created_at DESC",
-            int(sec_id))
-        return [dict(r) for r in rows]
+            "SELECT DISTINCT test_num FROM mock_content WHERE section_id=$1 AND subsection=$2 ORDER BY test_num",
+            int(sec_id), subsection)
+        return [r["test_num"] for r in rows]
 
 async def db_del_mcontent(cid):
     p = await get_pool()
@@ -402,9 +425,15 @@ class MSec(StatesGroup):
     waiting = State()
 
 class MContent(StatesGroup):
-    sec_id  = State()
-    title   = State()
-    content = State()
+    sec_id     = State()
+    title      = State()
+    content    = State()
+
+class AddMock(StatesGroup):
+    sec_id     = State()
+    subsection = State()
+    test_num   = State()
+    content    = State()
 
 class DelMContent(StatesGroup):
     cid = State()
@@ -616,14 +645,68 @@ async def mock_sec(cb: CallbackQuery):
     sec = next((s for s in secs if s["id"] == sec_id), None)
     if not sec:
         return await cb.answer("Section not found.", show_alert=True)
-    items = await db_get_mcontent(sec_id)
+    subsecs = MOCK_SUBSECTIONS.get(sec["name"])
+    if subsecs:
+        # Show subsection buttons (Parts/Passages)
+        kb = ikb([
+            [btn(sub, f"msubsec:{sec_id}:{sub}")]
+            for sub in subsecs
+        ] + [back_btn("m:mock")])
+        await cb.message.edit_text(
+            f"<b>{sec['name']}</b>\n\nChoose section:",
+            reply_markup=kb)
+    else:
+        # Writing/Speaking — show test numbers directly
+        tests = await db_get_mock_tests(sec_id, "")
+        if not tests:
+            return await cb.message.edit_text(
+                f"<b>{sec['name']}</b>\n\n📭 Nothing here yet!",
+                reply_markup=simple_back_kb("m:mock"))
+        kb = ikb([
+            [btn(f"📝 Test {t}", f"mtest:{sec_id}::{t}")]
+            for t in tests
+        ] + [back_btn("m:mock")])
+        await cb.message.edit_text(
+            f"<b>{sec['name']}</b>\n\nChoose test:",
+            reply_markup=kb)
+
+@router.callback_query(F.data.startswith("msubsec:"))
+async def mock_subsec(cb: CallbackQuery):
+    parts = cb.data.split(":", 2)
+    sec_id = int(parts[1])
+    subsec = parts[2]
+    secs = await db_get_msecs()
+    sec = next((s for s in secs if s["id"] == sec_id), None)
+    tests = await db_get_mock_tests(sec_id, subsec)
+    if not tests:
+        return await cb.message.edit_text(
+            f"<b>{sec['name'] if sec else ''}</b> — <b>{subsec}</b>\n\n📭 Nothing here yet!",
+            reply_markup=simple_back_kb(f"msec:{sec_id}"))
+    kb = ikb([
+        [btn(f"📝 Test {t}", f"mtest:{sec_id}:{subsec}:{t}")]
+        for t in tests
+    ] + [back_btn(f"msec:{sec_id}")])
+    await cb.message.edit_text(
+        f"<b>{sec['name'] if sec else ''}</b> — <b>{subsec}</b>\n\nChoose test:",
+        reply_markup=kb)
+
+@router.callback_query(F.data.startswith("mtest:"))
+async def mock_test(cb: CallbackQuery):
+    parts = cb.data.split(":")
+    sec_id = int(parts[1])
+    # parts[2] may be subsec (could contain spaces), parts[-1] is test_num
+    test_num = int(parts[-1])
+    subsec = ":".join(parts[2:-1])
+    back_target = f"msubsec:{sec_id}:{subsec}" if subsec else f"msec:{sec_id}"
+    items = await db_get_mcontent(sec_id, subsec if subsec else None)
+    items = [i for i in items if i["test_num"] == test_num]
     if not items:
         return await cb.message.edit_text(
-            f"<b>{sec['name']}</b>\n\n📭 Nothing here yet!",
-            reply_markup=simple_back_kb("m:mock"))
+            f"📭 No content for Test {test_num} yet!",
+            reply_markup=simple_back_kb(back_target))
     await cb.message.edit_text(
-        f"<b>{sec['name']}</b> — Sending <b>{len(items)}</b> item(s)...",
-        reply_markup=simple_back_kb("m:mock"))
+        f"📤 Sending <b>Test {test_num}</b> — <b>{len(items)}</b> file(s)...",
+        reply_markup=simple_back_kb(back_target))
     for item in items:
         await send_item(cb.bot, cb.from_user.id, item)
 
@@ -648,10 +731,11 @@ async def cmd_admin(m: Message):
         "/add_ucontent — Add content to category\n"
         "/del_ucontent — Delete content by ID\n\n"
         "<b>Mock Tests:</b>\n"
+        "/add_mock — Add mock test (button-based)\n"
         "/add_msec — Add section\n"
         "/del_msec — Delete section\n"
         "/rename_msec — Rename section\n"
-        "/add_mcontent — Add content to section\n"
+        "/add_mcontent — Add content to section (legacy)\n"
         "/del_mcontent — Delete content by ID\n\n"
         "<b>Messages:</b>\n"
         "/reminder — Send reminder to group\n"
@@ -1010,6 +1094,129 @@ async def mcontent_body(m: Message, state: FSMContext):
         m, state,
         lambda **kw: db_add_mcontent(sec_id, title, **kw)
     )
+
+# ── /add_mock — button-based mock content upload
+def am_section_kb(secs):
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [btn(s["name"], f"am_sec:{s['id']}:{s['name']}")]
+        for s in secs
+    ] + [[btn("❌ Cancel", "am_cancel")]])
+
+def am_subsec_kb(sec_id, sec_name):
+    subsecs = MOCK_SUBSECTIONS.get(sec_name, [])
+    if not subsecs:
+        return None
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [btn(sub, f"am_sub:{sec_id}:{sub}")]
+        for sub in subsecs
+    ] + [[btn("⬅️ Back", "am_back:sec"), btn("❌ Cancel", "am_cancel")]])
+
+def am_testnum_kb(sec_id, subsec, existing):
+    next_num = max(existing, default=0) + 1
+    nums = sorted(set(existing + [next_num]))
+    rows = [[btn(f"📝 Test {n}" + (" ✚" if n == next_num else ""), f"am_test:{sec_id}:{subsec}:{n}")] for n in nums]
+    rows.append([btn("⬅️ Back", f"am_back:sub:{sec_id}:{subsec}"), btn("❌ Cancel", "am_cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+@router.message(Command("add_mock"))
+async def cmd_add_mock(m: Message, state: FSMContext):
+    if not isa(m.from_user.id): return await m.answer("Not authorized.")
+    await state.clear()
+    secs = await db_get_msecs()
+    if not secs: return await m.answer("No mock sections yet.")
+    await state.set_state(AddMock.sec_id)
+    await m.answer("➕ <b>Add Mock Test</b>\n\nChoose section:", reply_markup=am_section_kb(secs))
+
+@router.callback_query(F.data == "am_cancel")
+async def am_cancel(cb: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await cb.message.edit_text("❌ Cancelled.")
+
+@router.callback_query(F.data == "am_back:sec")
+async def am_back_sec(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(AddMock.sec_id)
+    secs = await db_get_msecs()
+    await cb.message.edit_text("➕ <b>Add Mock Test</b>\n\nChoose section:", reply_markup=am_section_kb(secs))
+
+@router.callback_query(F.data.startswith("am_sec:"), AddMock.sec_id)
+async def am_sec_cb(cb: CallbackQuery, state: FSMContext):
+    parts = cb.data.split(":", 2)
+    sec_id, sec_name = int(parts[1]), parts[2]
+    await state.update_data(sec_id=sec_id, sec_name=sec_name)
+    sub_kb = am_subsec_kb(sec_id, sec_name)
+    if sub_kb:
+        await state.set_state(AddMock.subsection)
+        await cb.message.edit_text(
+            f"Section: <b>{sec_name}</b>\n\nChoose part/passage:",
+            reply_markup=sub_kb)
+    else:
+        # No subsection — go straight to test number
+        await state.update_data(subsection="")
+        await state.set_state(AddMock.test_num)
+        existing = await db_get_mock_tests(sec_id, "")
+        await cb.message.edit_text(
+            f"Section: <b>{sec_name}</b>\n\nChoose test number (✚ = new):",
+            reply_markup=am_testnum_kb(sec_id, "", existing))
+
+@router.callback_query(F.data.startswith("am_back:sub:"))
+async def am_back_sub(cb: CallbackQuery, state: FSMContext):
+    parts = cb.data.split(":", 3)
+    sec_id, subsec = int(parts[2]), parts[3]
+    d = await state.get_data()
+    sec_name = d.get("sec_name", "")
+    sub_kb = am_subsec_kb(sec_id, sec_name)
+    if sub_kb:
+        await state.set_state(AddMock.subsection)
+        await cb.message.edit_text(
+            f"Section: <b>{sec_name}</b>\n\nChoose part/passage:",
+            reply_markup=sub_kb)
+    else:
+        await am_back_sec(cb, state)
+
+@router.callback_query(F.data.startswith("am_sub:"), AddMock.subsection)
+async def am_sub_cb(cb: CallbackQuery, state: FSMContext):
+    parts = cb.data.split(":", 2)
+    sec_id, subsec = int(parts[1]), parts[2]
+    await state.update_data(subsection=subsec)
+    await state.set_state(AddMock.test_num)
+    existing = await db_get_mock_tests(sec_id, subsec)
+    d = await state.get_data()
+    sec_name = d.get("sec_name", "")
+    await cb.message.edit_text(
+        f"Section: <b>{sec_name}</b> — <b>{subsec}</b>\n\nChoose test number (✚ = new):",
+        reply_markup=am_testnum_kb(sec_id, subsec, existing))
+
+@router.callback_query(F.data.startswith("am_test:"), AddMock.test_num)
+async def am_test_cb(cb: CallbackQuery, state: FSMContext):
+    parts = cb.data.split(":")
+    sec_id = int(parts[1])
+    subsec = ":".join(parts[2:-1])
+    test_num = int(parts[-1])
+    await state.update_data(test_num=test_num)
+    await state.set_state(AddMock.content)
+    d = await state.get_data()
+    sec_name = d.get("sec_name", "")
+    cancel_kb = InlineKeyboardMarkup(inline_keyboard=[[btn("❌ Cancel", "am_cancel")]])
+    await cb.message.edit_text(
+        f"Section: <b>{sec_name}</b>{' — ' + subsec if subsec else ''}\n"
+        f"Test: <b>Test {test_num}</b>\n\n"
+        f"📤 Send the file (video/audio/photo/document/text):",
+        reply_markup=cancel_kb)
+
+@router.message(AddMock.content)
+async def am_content(m: Message, state: FSMContext):
+    d = await state.get_data()
+    sec_id   = d["sec_id"]
+    subsec   = d.get("subsection", "")
+    test_num = d.get("test_num", 1)
+    sec_name = d.get("sec_name", "")
+    title    = f"Test {test_num}" + (f" — {subsec}" if subsec else "")
+    await save_content_from_msg(
+        m, state,
+        lambda **kw: db_add_mcontent(sec_id, title, subsection=subsec, test_num=test_num, **kw)
+    )
+    label = f"{sec_name}{' — ' + subsec if subsec else ''} — Test {test_num}"
+    await m.answer(f"✅ Uploaded to <b>{label}</b>!")
 
 @router.message(Command("del_mcontent"))
 async def cmd_del_mcontent(m: Message, state: FSMContext):
